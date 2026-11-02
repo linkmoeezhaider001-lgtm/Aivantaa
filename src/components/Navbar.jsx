@@ -14,8 +14,8 @@ export default function Navbar() {
     <header className="fixed inset-x-0 top-0 z-50 border-b border-zinc-800/70 bg-zinc-950/75 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5 lg:px-8">
         <a href="#" className="flex items-center gap-3 font-mono text-[11px] font-bold tracking-[0.18em] text-zinc-100">
-          <span className="flex h-7 w-7 items-center justify-center rounded border border-cyan-400/50 text-cyan-300 shadow-cyan">R</span>
-          REACTIVATION<span className="text-cyan-300">.ENGINE</span>
+          <span className="flex h-7 w-7 items-center justify-center rounded border border-cyan-400/50 text-cyan-300 shadow-cyan">A</span>
+          AIVANTA<span className="text-cyan-300"> AGENCY</span>
         </a>
         <nav className="hidden items-center gap-7 md:flex">
           {links.map(([label, href]) => (

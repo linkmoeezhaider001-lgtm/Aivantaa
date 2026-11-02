@@ -10,7 +10,7 @@ export default function MechanismEngine() {
   return (
     <section id="mechanism" className="border-y border-zinc-900 bg-zinc-950/60">
       <div className="mx-auto max-w-7xl px-5 py-28 lg:px-8">
-        <p className="font-mono text-[11px] tracking-[0.2em] text-cyan-300">// 02. THE REACTION ENGINE</p>
+        <p className="font-mono text-[11px] tracking-[0.2em] text-cyan-300">// 02. THE REACTION AGENCY</p>
         <h2 className="mt-5 max-w-3xl text-4xl font-medium tracking-[-0.05em] text-zinc-100 sm:text-6xl">Precision AI Tailored to Your Pipeline Infrastructure.</h2>
         <div className="mt-14 grid gap-px border border-zinc-800 bg-zinc-800 md:grid-cols-3">
           {phases.map(([title, copy, Icon], index) => (

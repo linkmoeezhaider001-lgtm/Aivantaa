@@ -19,7 +19,7 @@ export default function Home() {
         <TelemetryMetrics />
         <QualificationMatrix />
         <ConversionTerminal />
-        <footer className="border-t border-zinc-900 px-5 py-8 text-center font-mono text-[10px] tracking-wider text-zinc-600">REACTIVATION.ENGINE // REVENUE, REBOOTED © 2026</footer>
+        <footer className="border-t border-zinc-900 px-5 py-8 text-center font-mono text-[10px] tracking-wider text-zinc-600">AIVANTA AGENCY // REVENUE, REBOOTED © 2026</footer>
       </div>
     </main>
   );

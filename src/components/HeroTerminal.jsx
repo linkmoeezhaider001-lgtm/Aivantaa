@@ -40,13 +40,13 @@ export default function HeroTerminal() {
             <span className="text-emerald-300">● CONNECTED</span>
           </div>
           <div className="space-y-5 p-5 font-mono text-[11px] leading-5 sm:p-7">
-            <div className="text-zinc-600">root@reactivation-engine:~$ ./wake_database --autonomous</div>
+            <div className="text-zinc-600">root@aivanta-agency:~$ ./wake_database --autonomous</div>
             {logs.map((log, index) => (
               <motion.div key={log} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.65 + index * 0.45 }} className={index === logs.length - 1 ? "text-cyan-300" : "text-zinc-400"}>
                 <span className="mr-2 text-purple-400">→</span>{log}
               </motion.div>
             ))}
-            <div className="pt-4 text-zinc-600">root@reactivation-engine:~$ <span className="text-zinc-300">awaiting new signal</span><span className="terminal-caret ml-1 text-cyan-300">▋</span></div>
+            <div className="pt-4 text-zinc-600">root@aivanta-agency:~$ <span className="text-zinc-300">awaiting new signal</span><span className="terminal-caret ml-1 text-cyan-300">▋</span></div>
           </div>
           <div className="grid grid-cols-3 border-t border-zinc-800 bg-zinc-950/60 p-4 font-mono text-[9px] uppercase tracking-wider">
             <div><p className="text-zinc-600">Records</p><p className="mt-1 text-zinc-200">12,842</p></div>

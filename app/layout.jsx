@@ -1,7 +1,7 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Reactivation Engine | Revenue, Rebooted",
+  title: "Aivanta Agency | Revenue, Rebooted",
   description: "Autonomous AI operators for dormant CRM revenue.",
 };
 
