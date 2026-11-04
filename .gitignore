@@ -1,7 +1,14 @@
 .env
 .env.local
+*.env
+*.env.*
+!.env.example
+!backend/.env.example
 .next
 node_modules
 .venv
 __pycache__
 *.py[cod]
+*.pyc
+dist
+build
