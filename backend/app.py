@@ -1,29 +1,29 @@
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
 import asyncio
 import csv
 import io
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
 import asyncpg
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Request
+from dotenv import load_dotenv
+from fastapi import FastAPI, Header, HTTPException
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel, ConfigDict, Field
 
 
+load_dotenv()
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 
-MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
+MODEL_NAME = "gemini-1.5-flash"
 SYSTEM_INSTRUCTION = (
     "You are the scheduling coordinator for a MedSpa. A lead has responded to an SMS "
     "check-in. Your sole objective is to book them for a 15-minute phone consultation. "
@@ -35,13 +35,6 @@ SYSTEM_INSTRUCTION = (
 
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 db_pool: asyncpg.Pool | None = None
-
-
-class WebhookPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    phone_number: str = Field(min_length=1, max_length=64)
-    text: str = Field(min_length=1, max_length=10_000)
 
 
 class WebhookResponse(BaseModel):
@@ -66,10 +59,34 @@ class AuditResponse(BaseModel):
 
 
 def required_env(name: str) -> str:
-    value = os.environ.get(name)
+    value = os.getenv(name)
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return value
+
+
+def required_value(values: dict[str, Any], field_name: str) -> str:
+    value = values.get(field_name)
+    if not isinstance(value, str) or not value.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=f"GHL webhook requires a non-empty {field_name} field",
+        )
+    return value.strip()
+
+
+def nested_required_value(
+    payload: dict[str, Any],
+    parent_name: str,
+    field_name: str,
+) -> str:
+    parent = payload.get(parent_name)
+    if not isinstance(parent, dict):
+        raise HTTPException(
+            status_code=400,
+            detail=f"GHL webhook requires the {parent_name} object",
+        )
+    return required_value(parent, field_name)
 
 
 def create_booking_tool() -> types.Tool:
@@ -100,9 +117,9 @@ def create_booking_tool() -> types.Tool:
 async def create_pool() -> asyncpg.Pool:
     return await asyncpg.create_pool(
         dsn=required_env("DATABASE_URL"),
-        min_size=int(os.environ.get("DB_POOL_MIN_SIZE", "1")),
-        max_size=int(os.environ.get("DB_POOL_MAX_SIZE", "10")),
-        command_timeout=float(os.environ.get("DB_COMMAND_TIMEOUT_SECONDS", "15")),
+        min_size=int(os.getenv("DB_POOL_MIN_SIZE", "1")),
+        max_size=int(os.getenv("DB_POOL_MAX_SIZE", "10")),
+        command_timeout=float(os.getenv("DB_COMMAND_TIMEOUT_SECONDS", "15")),
         max_inactive_connection_lifetime=300,
     )
 
@@ -112,6 +129,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     global db_pool
 
     required_env("GEMINI_API_KEY")
+    required_env("GHL_API_KEY")
     db_pool = await create_pool()
     try:
         yield
@@ -121,12 +139,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             db_pool = None
 
 
-app = FastAPI(title="AI SMS Reactivation Webhook", lifespan=lifespan)
+app = FastAPI(title="AI GHL MedSpa Webhook", lifespan=lifespan)
 
 
 def verify_intake_key(authorization: str | None) -> None:
-    expected = os.environ.get("REACTIVATION_INTAKE_API_KEY")
-    if expected and authorization != f"Bearer {expected}":
+    expected = os.getenv("REACTIVATION_INTAKE_API_KEY")
+    if expected and authorization != f"******":
         raise HTTPException(status_code=401, detail="Invalid intake credentials")
 
 
@@ -139,10 +157,12 @@ async def create_audit(
     audit_id = f"audit_{uuid.uuid4().hex}"
     metrics = None
     if payload.csv_text:
-        reader = csv.DictReader(io.StringIO(payload.csv_text))
-        rows = list(reader)
+        rows = list(csv.DictReader(io.StringIO(payload.csv_text)))
         normalized_rows = [
-            {str(key).strip().lower(): (value or "").strip() for key, value in row.items()}
+            {
+                str(key).strip().lower(): (value or "").strip()
+                for key, value in row.items()
+            }
             for row in rows
         ]
         metrics = {
@@ -172,9 +192,26 @@ def get_pool() -> asyncpg.Pool:
     return db_pool
 
 
-async def load_history(
-    phone_number: str,
-) -> tuple[int, list[types.Content]]:
+async def load_client_knowledge_base(medspa_number: str) -> str:
+    pool = get_pool()
+    async with pool.acquire() as connection:
+        knowledge_base = await connection.fetchval(
+            """
+            SELECT knowledge_base
+            FROM client_knowledge_bases
+            WHERE medspa_number = $1
+            """,
+            medspa_number,
+        )
+    if not isinstance(knowledge_base, str) or not knowledge_base.strip():
+        raise HTTPException(
+            status_code=404,
+            detail="No knowledge base configured for this MedSpa",
+        )
+    return knowledge_base.strip()
+
+
+async def load_history(phone_number: str) -> tuple[int, list[types.Content]]:
     pool = get_pool()
     async with pool.acquire() as connection:
         lead = await connection.fetchrow(
@@ -183,7 +220,6 @@ async def load_history(
         )
         if lead is None:
             return 0, []
-
         rows = await connection.fetch(
             """
             SELECT role, content
@@ -193,7 +229,6 @@ async def load_history(
             """,
             lead["id"],
         )
-
     return (
         int(lead["id"]),
         [
@@ -206,11 +241,7 @@ async def load_history(
     )
 
 
-async def save_user_message(
-    phone_number: str,
-    text: str,
-    lead_id: int,
-) -> int:
+async def save_user_message(phone_number: str, text: str, lead_id: int) -> int:
     pool = get_pool()
     async with pool.acquire() as connection:
         async with connection.transaction():
@@ -219,7 +250,7 @@ async def save_user_message(
                     """
                     UPDATE leads
                     SET status = CASE
-                        WHEN status = 'pending' THEN 'contacted'
+                        WHEN status IN ('pending', 'dormant') THEN 'contacted'
                         ELSE status
                     END
                     WHERE id = $1
@@ -233,14 +264,13 @@ async def save_user_message(
                     VALUES ($1, 'contacted')
                     ON CONFLICT (phone_number)
                     DO UPDATE SET status = CASE
-                        WHEN leads.status = 'pending' THEN 'contacted'
+                        WHEN leads.status IN ('pending', 'dormant') THEN 'contacted'
                         ELSE leads.status
                     END
                     RETURNING id
                     """,
                     phone_number,
                 )
-
             await connection.execute(
                 """
                 INSERT INTO messages (lead_id, role, content)
@@ -265,6 +295,24 @@ async def save_model_message(lead_id: int, response: str) -> None:
         )
 
 
+async def log_outbound_ai_message(
+    phone_number: str,
+    response: str,
+    created_at: datetime,
+) -> None:
+    pool = get_pool()
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO chat_logs (phone_number, direction, content, created_at)
+            VALUES ($1, 'outbound', $2, $3)
+            """,
+            phone_number,
+            response,
+            created_at,
+        )
+
+
 async def book_appointment(
     phone_number: str,
     appointment_time: str,
@@ -279,11 +327,8 @@ async def book_appointment(
             """,
             phone_number,
         )
-
     if updated != "UPDATE 1":
         raise ValueError(f"No lead found for phone number {phone_number}")
-
-    logger.info("Booked appointment for %s at %s", phone_number, appointment_time)
     return {
         "status": "booked",
         "phone_number": phone_number,
@@ -291,37 +336,38 @@ async def book_appointment(
     }
 
 
-async def send_sms(to_number: str, message_body: str) -> None:
-    api_key = os.environ.get("TELNYX_API_KEY")
-    phone_number = os.environ.get("TELNYX_PHONE_NUMBER")
-    if not api_key or not phone_number:
-        print(
-            "Telnyx SMS not sent: missing TELNYX_API_KEY "
-            "or TELNYX_PHONE_NUMBER"
-        )
-        return
+async def send_ghl_message(
+    location_id: str,
+    contact_id: str,
+    message_body: str,
+) -> None:
+    api_key = os.getenv("GHL_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GHL configuration is incomplete")
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as http_client:
             response = await http_client.post(
-                "https://api.telnyx.com/v2/messages",
+                "https://services.leadconnectorhq.com/conversations/messages",
                 headers={
                     "Authorization": f"Bearer {api_key}",
+                    "Version": "2021-04-15",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "from": phone_number,
-                    "to": to_number,
-                    "text": message_body,
+                    "type": "SMS",
+                    "contactId": contact_id,
+                    "locationId": location_id,
+                    "message": message_body,
                 },
             )
-        if response.status_code != 200:
-            print(
-                f"Telnyx SMS failed ({response.status_code}): "
-                f"{response.text}"
-            )
     except httpx.HTTPError as exc:
-        print(f"Telnyx SMS request failed: {exc}")
+        logger.exception("GHL message request failed")
+        raise HTTPException(status_code=500, detail="GHL message request failed") from exc
+
+    if response.status_code not in {200, 201, 202}:
+        logger.error("GHL rejected message with status %s: %s", response.status_code, response.text)
+        raise HTTPException(status_code=502, detail="GHL message delivery failed")
 
 
 def response_text(response: types.GenerateContentResponse) -> str:
@@ -344,9 +390,10 @@ def get_function_call(
 async def generate_response(
     history: list[types.Content],
     phone_number: str,
+    knowledge_base: str,
 ) -> str:
     config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_INSTRUCTION,
+        system_instruction=f"{SYSTEM_INSTRUCTION}\n\nMedSpa knowledge base:\n{knowledge_base}",
         tools=[create_booking_tool()],
     )
     response = await asyncio.wait_for(
@@ -361,7 +408,6 @@ async def generate_response(
     function_call = get_function_call(response)
     if function_call is None:
         return response_text(response)
-
     if function_call.name != "book_appointment":
         raise ValueError(f"Unsupported Gemini function: {function_call.name}")
 
@@ -402,28 +448,32 @@ async def generate_response(
 
 
 @app.post("/webhook", response_model=WebhookResponse)
-async def receive_webhook(
-    payload: WebhookPayload,
-    request: Request,
-) -> WebhookResponse:
-    del request
+async def receive_webhook(payload: dict[str, Any]) -> WebhookResponse:
     try:
-        lead_id, history = await load_history(payload.phone_number)
-        lead_id = await save_user_message(
-            payload.phone_number,
-            payload.text,
-            lead_id,
-        )
+        lead_phone = nested_required_value(payload, "contact", "phone")
+        contact_id = nested_required_value(payload, "contact", "id")
+        medspa_number = nested_required_value(payload, "customData", "medspa_number")
+        inbound_text = nested_required_value(payload, "message", "body")
+        location_id = required_value(payload, "locationId")
+
+        knowledge_base = await load_client_knowledge_base(medspa_number)
+        lead_id, history = await load_history(lead_phone)
+        lead_id = await save_user_message(lead_phone, inbound_text, lead_id)
         history.append(
             types.Content(
                 role="user",
-                parts=[types.Part.from_text(text=payload.text)],
+                parts=[types.Part.from_text(text=inbound_text)],
             )
         )
-        generated = await generate_response(history, payload.phone_number)
+        generated = await generate_response(history, lead_phone, knowledge_base)
         await save_model_message(lead_id, generated)
-        await send_sms(payload.phone_number, generated)
-        return WebhookResponse(phone_number=payload.phone_number, response=generated)
+        await send_ghl_message(location_id, contact_id, generated)
+        await log_outbound_ai_message(
+            lead_phone,
+            generated,
+            datetime.now(timezone.utc),
+        )
+        return WebhookResponse(phone_number=lead_phone, response=generated)
     except TimeoutError as exc:
         logger.exception("Gemini request timed out")
         raise HTTPException(status_code=504, detail="Gemini request timed out") from exc
@@ -435,10 +485,9 @@ async def receive_webhook(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except genai_errors.APIError as exc:
         logger.exception("Gemini API request failed")
-        raise HTTPException(
-            status_code=502,
-            detail=f"Gemini API request failed: {exc}",
-        ) from exc
+        raise HTTPException(status_code=502, detail=f"Gemini API request failed: {exc}") from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("Webhook processing failed")
         raise HTTPException(status_code=502, detail="Unable to process message") from exc

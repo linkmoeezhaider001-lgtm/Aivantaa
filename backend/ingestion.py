@@ -1,93 +1,104 @@
+import asyncio
 import csv
 import os
-import random
-import httpx
-import asyncio
+import re
+from pathlib import Path
+
 import asyncpg
 from dotenv import load_dotenv
 
-# Load credentials
-load_dotenv()
-TELNYX_API_KEY = os.environ.get("TELNYX_API_KEY")
-FROM_NUMBER = os.environ.get("TELNYX_PHONE_NUMBER")
-DATABASE_URL = os.environ.get("DATABASE_URL")
 
-async def ignite_campaign():
-    print("Connecting to Neon Postgres...")
-    # Connect directly to your Neon database
-    conn = await asyncpg.connect(DATABASE_URL)
-    
+BACKEND_DIR = Path(__file__).resolve().parent
+CSV_PATH = BACKEND_DIR / "leads.csv"
+CLIENT_ID = "medspa_demo"
+PHONE_FIELDS = ("phone_number", "phone", "mobile", "mobile_number")
+
+load_dotenv(BACKEND_DIR / ".env")
+
+
+def normalize_phone(value: str) -> str:
+    compact = re.sub(r"[\s().-]", "", value.strip())
+    if compact.startswith("00"):
+        compact = f"+{compact[2:]}"
+    elif compact.startswith("+"):
+        pass
+    elif compact.isdigit() and len(compact) == 10:
+        compact = f"+1{compact}"
+    elif compact.isdigit() and len(compact) == 11 and compact.startswith("1"):
+        compact = f"+{compact}"
+    else:
+        raise ValueError(f"unsupported phone number format: {value!r}")
+
+    if not re.fullmatch(r"\+[1-9]\d{7,14}", compact):
+        raise ValueError(f"phone number is not valid E.164: {value!r}")
+    return compact
+
+
+def get_phone(row: dict[str, str | None], line_number: int) -> str:
+    for field in PHONE_FIELDS:
+        value = row.get(field)
+        if value and value.strip():
+            return normalize_phone(value)
+    raise ValueError(f"CSV line {line_number} has no phone number")
+
+
+def get_name(row: dict[str, str | None]) -> str | None:
+    first_name = (row.get("first_name") or "").strip()
+    last_name = (row.get("last_name") or "").strip()
+    full_name = " ".join(part for part in (first_name, last_name) if part)
+    return full_name or (row.get("name") or "").strip() or None
+
+
+async def import_leads() -> int:
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is required")
+    if not CSV_PATH.is_file():
+        raise FileNotFoundError(f"Lead CSV not found: {CSV_PATH}")
+
+    pool = await asyncpg.create_pool(dsn=database_url, min_size=1, max_size=5)
+    inserted = 0
     try:
-        with open("leads.csv", mode="r", encoding="utf-8-sig") as file:
-            reader = csv.DictReader(file)
-            
-            # Use an async HTTP client for the Telnyx request
-            async with httpx.AsyncClient() as client:
-                for row in reader:
-                    name = row.get("Name", "there").strip()
-                    to_number = row.get("Phone", "").strip()
-
-                    if not to_number:
-                        continue
-
-                    # The Opening Hook
-                    message_body = f"Hey {name}, it's Sarah from the clinic. Are you still looking to get that treatment sorted out?"
-
-                    # 1. DATABASE SYNC: Check if lead exists. If not, create them.
-                    lead = await conn.fetchrow("SELECT id FROM leads WHERE phone_number = $1", to_number)
-                    if not lead:
-                        lead_id = await conn.fetchval(
-                            "INSERT INTO leads (phone_number, name, status) VALUES ($1, $2, 'contacted') RETURNING id",
-                            to_number, name
-                        )
-                    else:
-                        lead_id = lead['id']
-
-                    # 2. DATABASE SYNC: Log the opening hook so Gemini has the memory context
-                    await conn.execute(
-                        "INSERT INTO messages (lead_id, role, content) VALUES ($1, 'model', $2)",
-                        lead_id, message_body
+        async with pool.acquire() as connection:
+            with CSV_PATH.open("r", encoding="utf-8-sig", newline="") as file:
+                reader = csv.DictReader(file)
+                fieldnames = {
+                    field.strip().lower()
+                    for field in (reader.fieldnames or [])
+                    if field
+                }
+                if not fieldnames.intersection({"first_name", "name"}):
+                    raise ValueError(
+                        "CSV must include a first_name or name column"
                     )
 
-                    # 3. Fire the SMS via Telnyx
-                    headers = {
-                        "Authorization": f"Bearer {TELNYX_API_KEY}",
-                        "Content-Type": "application/json",
-                        "Accept": "application/json"
+                if not fieldnames.intersection(PHONE_FIELDS):
+                    raise ValueError(
+                        "CSV must include a phone_number, phone, or mobile column"
+                    )
+
+                for line_number, source_row in enumerate(reader, start=2):
+                    row = {
+                        (key.strip().lower() if key else ""): value
+                        for key, value in source_row.items()
                     }
-                    payload = {
-                        "from": FROM_NUMBER,
-                        "to": to_number,
-                        "text": message_body
-                    }
-
-                    try:
-                        response = await client.post(
-                            "https://api.telnyx.com/v2/messages",
-                            headers=headers,
-                            json=payload,
-                            timeout=10.0
-                        )
-                        
-                        if response.status_code == 200:
-                            print(f"[SUCCESS] Hook sent & logged to DB for {name} at {to_number}")
-                        else:
-                            print(f"[FAILED] {to_number} - Error: {response.text}")
-                            
-                    except Exception as e:
-                        print(f"[ERROR] Could not send to {to_number}: {str(e)}")
-
-                    # Randomized throttle (12 to 45 seconds) to mimic human texting
-                    throttle = random.uniform(12.0, 45.0)
-                    print(f"Sleeping for {round(throttle, 1)} seconds...\n")
-                    await asyncio.sleep(throttle)
-
-    except FileNotFoundError:
-        print("Error: 'leads.csv' not found. Please create the file with 'Name' and 'Phone' columns.")
+                    phone_number = get_phone(row, line_number)
+                    result = await connection.execute(
+                        """
+                        INSERT INTO leads (client_id, phone_number, name, status)
+                        VALUES ($1, $2, $3, 'dormant')
+                        ON CONFLICT (phone_number) DO NOTHING
+                        """,
+                        CLIENT_ID,
+                        phone_number,
+                        get_name(row),
+                    )
+                    if result == "INSERT 0 1":
+                        inserted += 1
     finally:
-        # Safely close the database connection
-        await conn.close()
+        await pool.close()
+    return inserted
+
 
 if __name__ == "__main__":
-    print("Initiating Reactivation Sequence...")
-    asyncio.run(ignite_campaign())
+    print(f"Imported {asyncio.run(import_leads())} new lead(s).")
