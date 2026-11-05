@@ -6,6 +6,7 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 import asyncpg
@@ -18,7 +19,7 @@ from google.genai import types
 from pydantic import BaseModel, ConfigDict, Field
 
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -33,7 +34,7 @@ SYSTEM_INSTRUCTION = (
     "Which works better?'"
 )
 
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+gemini_client: genai.Client | None = None
 db_pool: asyncpg.Pool | None = None
 
 
@@ -58,11 +59,36 @@ class AuditResponse(BaseModel):
     metrics: dict[str, int] | None = None
 
 
+class LeadIntakeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    practice_name: str = Field(min_length=1, max_length=200)
+    owner_name: str = Field(min_length=1, max_length=200)
+    email: str = Field(min_length=3, max_length=320)
+    phone: str = Field(min_length=7, max_length=32)
+    crm_type: str = Field(min_length=1, max_length=64)
+    lead_count: int = Field(ge=0)
+    avg_ltv: float = Field(ge=0)
+    has_csv_attached: bool
+
+
+class LeadIntakeResponse(BaseModel):
+    status: str
+    message: str
+    intake_id: str
+
+
 def required_env(name: str) -> str:
     value = os.getenv(name)
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return value
+
+
+def get_gemini_client() -> genai.Client:
+    if gemini_client is None:
+        raise RuntimeError("Gemini client is not initialized")
+    return gemini_client
 
 
 def required_value(values: dict[str, Any], field_name: str) -> str:
@@ -126,9 +152,9 @@ async def create_pool() -> asyncpg.Pool:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    global db_pool
+    global db_pool, gemini_client
 
-    required_env("GEMINI_API_KEY")
+    gemini_client = genai.Client(api_key=required_env("GEMINI_API_KEY"))
     required_env("GHL_API_KEY")
     db_pool = await create_pool()
     try:
@@ -137,6 +163,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         if db_pool is not None:
             await db_pool.close()
             db_pool = None
+        gemini_client = None
 
 
 app = FastAPI(title="AI GHL MedSpa Webhook", lifespan=lifespan)
@@ -398,7 +425,7 @@ async def generate_response(
     )
     response = await asyncio.wait_for(
         asyncio.to_thread(
-            client.models.generate_content,
+            get_gemini_client().models.generate_content,
             model=MODEL_NAME,
             contents=history,
             config=config,
@@ -437,7 +464,7 @@ async def generate_response(
     )
     final_response = await asyncio.wait_for(
         asyncio.to_thread(
-            client.models.generate_content,
+            get_gemini_client().models.generate_content,
             model=MODEL_NAME,
             contents=history,
             config=config,
@@ -447,8 +474,28 @@ async def generate_response(
     return response_text(final_response)
 
 
-@app.post("/webhook", response_model=WebhookResponse)
-async def receive_webhook(payload: dict[str, Any]) -> WebhookResponse:
+@app.post("/webhook", response_model=None)
+async def receive_webhook(payload: dict[str, Any]) -> WebhookResponse | LeadIntakeResponse:
+    if "practice_name" in payload:
+        try:
+            intake = LeadIntakeRequest.model_validate(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid lead intake payload") from exc
+
+        intake_id = f"intake_{uuid.uuid4().hex}"
+        logger.info(
+            "Lead intake received for %s (%s), CRM=%s, leads=%s",
+            intake.practice_name,
+            intake.email,
+            intake.crm_type,
+            intake.lead_count,
+        )
+        return LeadIntakeResponse(
+            status="accepted",
+            message="Lead intake accepted. Audit reserved.",
+            intake_id=intake_id,
+        )
+
     try:
         lead_phone = nested_required_value(payload, "contact", "phone")
         contact_id = nested_required_value(payload, "contact", "id")
