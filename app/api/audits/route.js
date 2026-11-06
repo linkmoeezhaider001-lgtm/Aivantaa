@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 
-const engineUrl = process.env.REACTIVATION_ENGINE_URL;
+const engineUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
 const engineApiKey = process.env.REACTIVATION_ENGINE_API_KEY;
 
 export async function POST(request) {
   if (!engineUrl) {
     return NextResponse.json(
-      { error: "REACTIVATION_ENGINE_URL is not configured" },
+      { error: "NEXT_PUBLIC_BACKEND_URL is not configured" },
       { status: 503 },
     );
   }

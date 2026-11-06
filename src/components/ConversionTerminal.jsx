@@ -79,8 +79,7 @@ export default function ConversionTerminal() {
     };
 
     setIsSubmitting(true);
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "");
-    const endpoint = backendUrl ? `${backendUrl}/webhook` : "/api/intake";
+    const endpoint = "/api/webhook";
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 12000);
 
