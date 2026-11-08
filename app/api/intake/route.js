@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 
 export async function POST(request) {
-  let payload;
+  let formData;
   try {
-    payload = await request.json();
+    formData = await request.formData();
   } catch {
     return NextResponse.json({ error: "Invalid intake payload" }, { status: 400 });
   }
@@ -14,10 +14,9 @@ export async function POST(request) {
   }
 
   try {
-    const response = await fetch(`${backendUrl.replace(/\/$/, "")}/webhook`, {
+    const response = await fetch(`${backendUrl.replace(/\/$/, "")}/intake`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: formData,
       cache: "no-store",
       signal: AbortSignal.timeout(12000),
     });

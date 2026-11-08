@@ -1,22 +1,31 @@
-CREATE TABLE IF NOT EXISTS leads (
+CREATE TABLE IF NOT EXISTS clients (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    client_id TEXT NOT NULL DEFAULT 'medspa_demo',
-    phone_number TEXT NOT NULL UNIQUE,
-    name TEXT,
-    status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'dormant', 'contacted', 'booked', 'dead')),
+    medspa_name TEXT NOT NULL,
+    owner_email TEXT NOT NULL,
+    crm_type TEXT NOT NULL,
+    file_url TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-ALTER TABLE leads
-    ADD COLUMN IF NOT EXISTS client_id TEXT NOT NULL DEFAULT 'medspa_demo';
+ALTER TABLE clients
+    ADD COLUMN IF NOT EXISTS crm_api_key VARCHAR;
 
-ALTER TABLE leads
-    DROP CONSTRAINT IF EXISTS leads_status_check;
+ALTER TABLE clients
+    ADD COLUMN IF NOT EXISTS crm_webhook_url TEXT;
 
-ALTER TABLE leads
-    ADD CONSTRAINT leads_status_check
-    CHECK (status IN ('pending', 'dormant', 'contacted', 'booked', 'dead'));
+CREATE TABLE IF NOT EXISTS leads (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    client_id BIGINT NOT NULL REFERENCES clients (id) ON DELETE CASCADE,
+    name TEXT,
+    phone TEXT,
+    email TEXT,
+    dormant_status TEXT NOT NULL DEFAULT 'dormant',
+    raw_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS leads_client_email_unique
+    ON leads (client_id, email);
 
 CREATE TABLE IF NOT EXISTS messages (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

@@ -4,6 +4,7 @@
 *.env.*
 !.env.example
 !backend/.env.example
+app-config.json
 .next
 node_modules
 .venv

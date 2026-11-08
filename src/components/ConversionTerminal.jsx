@@ -66,12 +66,14 @@ export default function ConversionTerminal() {
       return;
     }
     if (fileError) return;
+    if (!file) {
+      setFileError("Attach a CSV, XLS, or XLSX file before submitting.");
+      return;
+    }
 
     const payload = {
-      practice_name: String(formData.get("practice_name") || "").trim(),
-      owner_name: String(formData.get("owner_name") || "").trim(),
-      email,
-      phone,
+      medspa_name: String(formData.get("practice_name") || "").trim(),
+      owner_email: email,
       crm_type: String(formData.get("crm_type") || "Other"),
       lead_count: Number(formData.get("lead_count") || 0),
       avg_ltv: Number(formData.get("avg_ltv") || 0),
@@ -79,15 +81,18 @@ export default function ConversionTerminal() {
     };
 
     setIsSubmitting(true);
-    const endpoint = "/api/webhook";
+    const endpoint = "/api/intake";
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 12000);
 
     try {
+      const requestBody = new FormData();
+      Object.entries(payload).forEach(([key, value]) => requestBody.append(key, String(value)));
+      requestBody.append("file", file);
+
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: requestBody,
         signal: controller.signal,
       });
       if (!response.ok) throw new Error(`Intake request failed with status ${response.status}`);
