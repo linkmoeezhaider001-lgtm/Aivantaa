@@ -21,11 +21,11 @@ export default function Chatbot() {
   };
 
   return (
-    <div className="fixed bottom-6 right-6 z-50">
-      {isOpen && (
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end">
+      {isOpen ? (
         <section
           aria-label="Aivantaa support chat"
-          className="mb-4 flex h-[min(620px,calc(100vh-7rem))] w-[min(380px,calc(100vw-2.5rem))] flex-col overflow-hidden rounded-2xl border border-cyan-400/20 bg-zinc-950/95 shadow-2xl shadow-cyan-950/40 backdrop-blur-xl"
+          className="mb-4 flex h-[min(620px,calc(100vh-7rem))] w-[min(380px,calc(100vw-3rem))] flex-col overflow-hidden rounded-2xl border border-cyan-400/20 bg-zinc-950/95 shadow-2xl shadow-cyan-950/40 backdrop-blur-xl"
         >
           <header className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/80 px-4 py-3">
             <div className="flex items-center gap-3">
@@ -123,16 +123,16 @@ export default function Chatbot() {
             </div>
           </form>
         </section>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setIsOpen(true)}
+          aria-label="Open Aivantaa support chat"
+          className="flex h-14 w-14 items-center justify-center rounded-full border border-cyan-300/40 bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-500/25 transition hover:scale-105 hover:bg-cyan-300"
+        >
+          <MessageCircle size={23} />
+        </button>
       )}
-
-      <button
-        type="button"
-        onClick={() => setIsOpen((open) => !open)}
-        aria-label={isOpen ? "Close Aivantaa support chat" : "Open Aivantaa support chat"}
-        className="ml-auto flex h-14 w-14 items-center justify-center rounded-full border border-cyan-300/40 bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-500/25 transition hover:scale-105 hover:bg-cyan-300"
-      >
-        {isOpen ? <X size={22} /> : <MessageCircle size={23} />}
-      </button>
     </div>
   );
 }
