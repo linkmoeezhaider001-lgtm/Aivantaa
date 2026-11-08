@@ -21,7 +21,7 @@ export default function Chatbot() {
   };
 
   return (
-    <div className="fixed bottom-5 right-5 z-50 sm:bottom-7 sm:right-7">
+    <div className="fixed bottom-6 right-6 z-50">
       {isOpen && (
         <section
           aria-label="Aivantaa support chat"
