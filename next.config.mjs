@@ -1,10 +1,3 @@
-export default {
-  async rewrites() {
-    return [
-      {
-        source: '/api/:path*',
-        destination: 'https://aivantaa.me/:path*',
-      },
-    ]
-  },
-};
+/** @type {import('next').NextConfig} */
+const nextConfig = {};
+export default nextConfig;
