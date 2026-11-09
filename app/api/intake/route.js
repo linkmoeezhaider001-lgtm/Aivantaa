@@ -68,7 +68,7 @@ export async function POST(req) {
     // 6. Create the Lead records in your Leads table, linking each to the Client
       // Extract core fields and bundle the rest into metadata
     const insertPromises = records.map((record) => {
-      const { Name, Email, Phone, CRM, ...extraFields } = record;
+      const { Name, Email, Phone, CRM, average_ltv, dormant_leads_count, ...extraFields } = record;
 
       return databases.createDocument(
         DATABASE_ID,
@@ -79,7 +79,9 @@ export async function POST(req) {
           Email: Email || "",
           Phone: Phone || "",
           CRM: CRM || "",
-          metadata: JSON.stringify(extraFields || {}) // Safely stores any custom CSV columns
+          average_ltv: parseFloat(average_ltv) || 0,
+          dormant_leads_count: parseInt(dormant_leads_count, 10) || 0,
+          metadata: JSON.stringify(extraFields || {})
         }
       );
     });
