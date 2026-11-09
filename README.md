@@ -1,128 +1,75 @@
-# Aivanta
+# Aivantaa
 
-AI-powered MedSpa reactivation and GoHighLevel (GHL) webhook integration.
+AI-powered MedSpa lead reactivation using Next.js, Appwrite TablesDB/Storage,
+Google Gemini, and GoHighLevel (GHL).
 
 ## Architecture
 
-The FastAPI backend receives inbound GHL webhook events, loads the MedSpa knowledge
-base from Neon Postgres, generates a response with Gemini, sends the response back
-through GHL, and records the outbound message in `chat_logs`.
-
-The backend does not connect directly to Twilio, Telnyx, or another telecom provider.
+- Next.js App Router provides the website and serverless API routes.
+- Appwrite Storage holds uploaded lead files.
+- Appwrite TablesDB stores `clients` and `leads` rows.
+- `components/CsvUploader.tsx` parses CSV files in the browser with PapaParse.
+- `/api/ingest` creates the Appwrite file, client row, and pending lead rows.
+- `/api/campaign` dispatches pending leads to GHL SMS and marks successful rows
+  as contacted.
+- `/api/chat` provides the support chatbot through Google Gemini.
 
 ## Requirements
 
-- Python 3.11+
-- Neon/Postgres database
-- Google Gemini API key
-- GoHighLevel API key and location/contact configuration
+- Node.js 20+
+- An Appwrite project with a Storage bucket and TablesDB database containing
+  `clients` and `leads` tables.
+- Google Gemini API key for the chatbot.
+- A GoHighLevel API key for campaign dispatch.
 
-## Backend setup
+## Environment
 
-From the repository root:
-
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r backend\requirements.txt
-Copy-Item backend\.env.example backend\.env
-```
-
-Set the values in `backend/.env`:
+Copy `.env.example` to `.env.local` and set:
 
 ```env
-GEMINI_API_KEY=
-DATABASE_URL=
-GHL_API_KEY=
-REACTIVATION_INTAKE_API_KEY=
-LOG_LEVEL=INFO
-DB_POOL_MIN_SIZE=1
-DB_POOL_MAX_SIZE=10
-DB_COMMAND_TIMEOUT_SECONDS=15
+APPWRITE_ENDPOINT=https://cloud.appwrite.io/v1
+APPWRITE_PROJECT_ID=
+APPWRITE_API_KEY=
+APPWRITE_DATABASE_ID=
+APPWRITE_FILES_BUCKET_ID=
+APPWRITE_CLIENTS_TABLE_ID=clients
+APPWRITE_LEADS_TABLE_ID=leads
+GOOGLE_GENERATIVE_AI_API_KEY=
 ```
 
-Never commit `backend/.env` or other files containing credentials.
+Never commit `.env.local` or any file containing credentials.
 
-## Database setup
-
-Apply the schema to the configured Neon database:
+## Run locally
 
 ```powershell
-psql "$env:DATABASE_URL" -f backend\schema.sql
+npm install
+npm run dev
 ```
 
-The webhook expects a `client_knowledge_bases` table with a `medspa_number`
-lookup column and a `knowledge_base` text column.
+The site runs at `http://localhost:3000`.
 
-## Run the API
+## API endpoints
 
-From the repository root:
+### `POST /api/ingest`
 
-```powershell
-uvicorn backend.app:app --reload --host 0.0.0.0 --port 8000
-```
+Accepts `multipart/form-data` containing:
 
-## GHL webhook payload
+- `medspa_name`
+- `owner_email`
+- `ghl_api_key`
+- `file` (CSV)
+- `leads` (the PapaParse-generated JSON array)
 
-Configure the GHL workflow to send JSON to:
+### `POST /api/campaign`
 
-```text
-POST /webhook
-Content-Type: application/json
-```
-
-Required fields:
+Accepts JSON:
 
 ```json
 {
-  "contact": {
-    "id": "ghl-contact-id",
-    "phone": "+13105550000"
-  },
-  "customData": {
-    "medspa_number": "+13105550199"
-  },
-  "message": {
-    "body": "Do you have availability this week?"
-  },
-  "locationId": "ghl-location-id"
+  "client_id": "appwrite-client-row-id",
+  "message_template": "Hi {{name}}, we have availability this week."
 }
 ```
 
-The response contains the lead phone number and generated AI response:
-
-```json
-{
-  "phone_number": "+13105550000",
-  "response": "..."
-}
-```
-
-## Local API test
-
-Start the API, then send a JSON request:
-
-```powershell
-Invoke-RestMethod `
-  -Uri http://127.0.0.1:8000/webhook `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body '{"contact":{"id":"test-contact","phone":"+13105550000"},"customData":{"medspa_number":"+13105550199"},"message":{"body":"Do you have availability this week?"},"locationId":"test-location"}'
-```
-
-## Other endpoint
-
-`POST /v1/audits` accepts contact information and optional CSV text for audit
-intake. If `REACTIVATION_INTAKE_API_KEY` is configured, include it as a bearer
-authorization value.
-
-## Lead ingestion
-
-To import `backend/leads.csv` into Neon:
-
-```powershell
-python backend\ingestion.py
-```
-
-The importer normalizes phone numbers to E.164, inserts dormant leads, and
-ignores duplicate phone numbers.
+The route sends pending leads to GHL and updates successful rows to
+`status: "contacted"`.
